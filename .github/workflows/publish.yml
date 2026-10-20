@@ -40,6 +40,7 @@ jobs:
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -57,5 +58,5 @@ jobs:
             AIO_TAG=${{ steps.aio.outputs.tag }}
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.aio.outputs.tag }}
-            ghcr.io/${{ github.repository }}:latest
+            ${{ steps.aio.outputs.image }}:${{ steps.aio.outputs.tag }}
+            ${{ steps.aio.outputs.image }}:latest
