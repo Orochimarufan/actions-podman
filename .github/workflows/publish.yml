@@ -95,7 +95,7 @@ jobs:
         id: buildah
         uses: redhat-actions/buildah-build@v3.1.0
         with:
-          image: actions-podman-self-test
+          image: localhost/actions-podman-self-test
           tags: ${{ github.sha }}
           containerfiles: ./Containerfile
           build-args: |
