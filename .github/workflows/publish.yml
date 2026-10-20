@@ -13,6 +13,16 @@ on:
         description: "aio base image tag (blank selects the newest dated tag)"
         required: false
         type: string
+      overwrite_tag:
+        description: "Overwrite the selected dated tag if it already exists"
+        required: false
+        type: boolean
+        default: false
+      publish_latest:
+        description: "Also update the latest tag"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -25,12 +35,15 @@ jobs:
       tag: ${{ steps.aio.outputs.tag }}
       image: ${{ steps.aio.outputs.image }}
       candidate: ${{ steps.aio.outputs.candidate }}
+      publish_tags: ${{ steps.aio.outputs.publish_tags }}
       should_build: ${{ steps.aio.outputs.should_build }}
     steps:
       - name: Select aio tag
         id: aio
         env:
           AIO_TAG_INPUT: ${{ inputs.aio_tag }}
+          OVERWRITE_TAG: ${{ inputs.overwrite_tag }}
+          PUBLISH_LATEST: ${{ inputs.publish_latest }}
         run: |
           if [[ -n "$AIO_TAG_INPUT" ]]; then
             tag="$AIO_TAG_INPUT"
@@ -44,15 +57,36 @@ jobs:
             exit 1
           fi
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          candidate="$image:ci-${GITHUB_SHA}"
+          candidate="$image:test-${GITHUB_SHA}"
           should_build=true
-          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]] && docker manifest inspect "$image:$tag" >/dev/null 2>&1; then
-            echo "GHCR already contains $image:$tag; skipping scheduled build."
-            should_build=false
+          publish_tags=()
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            publish_tags+=("ci-${GITHUB_SHA}")
+          elif [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+            if docker manifest inspect "$image:$tag" >/dev/null 2>&1; then
+              echo "GHCR already contains $image:$tag; skipping scheduled build."
+              should_build=false
+            else
+              publish_tags+=("$tag" "latest")
+            fi
+          else
+            version_exists=false
+            if docker manifest inspect "$image:$tag" >/dev/null 2>&1; then
+              version_exists=true
+            fi
+            if [[ "$version_exists" != true || "$OVERWRITE_TAG" == true ]]; then
+              publish_tags+=("$tag")
+            fi
+            if [[ "$PUBLISH_LATEST" == true ]]; then
+              publish_tags+=("latest")
+            fi
           fi
+
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "image=$image" >> "$GITHUB_OUTPUT"
           echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+          echo "publish_tags=${publish_tags[*]}" >> "$GITHUB_OUTPUT"
           echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
 
   build-candidate:
@@ -110,7 +144,7 @@ jobs:
 
   publish:
     needs: [resolve, self-test]
-    if: needs.resolve.outputs.should_build == 'true' && github.event_name != 'push'
+    if: needs.resolve.outputs.publish_tags != ''
     runs-on: ubuntu-latest
     steps:
       - name: Log in to GitHub Container Registry
@@ -120,11 +154,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish version and latest tags
+      - name: Publish selected tags
         env:
           IMAGE: ${{ needs.resolve.outputs.image }}
           CANDIDATE: ${{ needs.resolve.outputs.candidate }}
-          AIO_TAG: ${{ needs.resolve.outputs.tag }}
+          PUBLISH_TAGS: ${{ needs.resolve.outputs.publish_tags }}
         run: |
-          docker buildx imagetools create --tag "$IMAGE:$AIO_TAG" "$CANDIDATE"
-          docker buildx imagetools create --tag "$IMAGE:latest" "$CANDIDATE"
+          for tag in $PUBLISH_TAGS; do
+            docker buildx imagetools create --tag "$IMAGE:$tag" "$CANDIDATE"
+          done
