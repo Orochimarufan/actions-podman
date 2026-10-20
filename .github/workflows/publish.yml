@@ -17,12 +17,13 @@ permissions:
   packages: write
 
 jobs:
-  build-and-publish:
+  resolve:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.aio.outputs.tag }}
+      image: ${{ steps.aio.outputs.image }}
+      should_build: ${{ steps.aio.outputs.should_build }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
       - name: Select aio tag
         id: aio
         env:
@@ -39,18 +40,33 @@ jobs:
             echo "Invalid or unavailable aio tag: $tag" >&2
             exit 1
           fi
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          should_build=true
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]] && docker manifest inspect "$image:$tag" >/dev/null 2>&1; then
+            echo "GHCR already contains $image:$tag; skipping scheduled build."
+            should_build=false
+          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
+
+  build-and-publish:
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7.4.0
         with:
           context: .
           file: ./Containerfile
@@ -58,5 +74,5 @@ jobs:
             AIO_TAG=${{ steps.aio.outputs.tag }}
           push: true
           tags: |
-            ${{ steps.aio.outputs.image }}:${{ steps.aio.outputs.tag }}
-            ${{ steps.aio.outputs.image }}:latest
+            ${{ needs.resolve.outputs.image }}:${{ needs.resolve.outputs.tag }}
+            ${{ needs.resolve.outputs.image }}:latest
