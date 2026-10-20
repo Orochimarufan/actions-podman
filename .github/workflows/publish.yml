@@ -101,7 +101,6 @@ jobs:
           build-args: |
             AIO_TAG=${{ needs.resolve.outputs.tag }}
           extra-args: |
-            --storage-driver=vfs
             --isolation=chroot
 
       - name: Smoke-test the nested build
