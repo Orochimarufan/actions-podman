@@ -116,7 +116,6 @@ jobs:
 
   self-test:
     needs: [resolve, build-candidate]
-    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.resolve.outputs.candidate }}
