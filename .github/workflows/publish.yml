@@ -22,7 +22,7 @@ on:
         description: "Also update the latest tag"
         required: false
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
