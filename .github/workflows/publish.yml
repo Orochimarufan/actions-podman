@@ -1,6 +1,8 @@
 name: Build and publish image
 
 on:
+  push:
+    branches: [main]
   schedule:
     # quay.io/containers/aio publishes dated tags weekly; check after the
     # usual Wednesday release window.
@@ -22,6 +24,7 @@ jobs:
     outputs:
       tag: ${{ steps.aio.outputs.tag }}
       image: ${{ steps.aio.outputs.image }}
+      candidate: ${{ steps.aio.outputs.candidate }}
       should_build: ${{ steps.aio.outputs.should_build }}
     steps:
       - name: Select aio tag
@@ -41,6 +44,7 @@ jobs:
             exit 1
           fi
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          candidate="$image:ci-${GITHUB_SHA}"
           should_build=true
           if [[ "$GITHUB_EVENT_NAME" == "schedule" ]] && docker manifest inspect "$image:$tag" >/dev/null 2>&1; then
             echo "GHCR already contains $image:$tag; skipping scheduled build."
@@ -48,9 +52,10 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
           echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
 
-  build-and-publish:
+  build-candidate:
     needs: resolve
     if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
@@ -65,7 +70,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push candidate image
         uses: docker/build-push-action@v7.4.0
         with:
           context: .
@@ -73,6 +78,54 @@ jobs:
           build-args: |
             AIO_TAG=${{ steps.aio.outputs.tag }}
           push: true
-          tags: |
-            ${{ needs.resolve.outputs.image }}:${{ needs.resolve.outputs.tag }}
-            ${{ needs.resolve.outputs.image }}:latest
+          tags: ${{ needs.resolve.outputs.candidate }}
+
+  self-test:
+    needs: [resolve, build-candidate]
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.resolve.outputs.candidate }}
+      options: --privileged
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Build this image inside itself with Buildah
+        id: buildah
+        uses: redhat-actions/buildah-build@v3.1.0
+        with:
+          image: actions-podman-self-test
+          tags: ${{ github.sha }}
+          containerfiles: ./Containerfile
+          build-args: |
+            AIO_TAG=${{ needs.resolve.outputs.tag }}
+          extra-args: |
+            --storage-driver=vfs
+            --isolation=chroot
+
+      - name: Smoke-test the nested build
+        run: |
+          podman run --rm localhost/actions-podman-self-test:${GITHUB_SHA} \
+            sh -lc 'node --version && git --version && podman --version && buildah --version && skopeo --version'
+
+  publish:
+    needs: [resolve, self-test]
+    if: needs.resolve.outputs.should_build == 'true' && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish version and latest tags
+        env:
+          IMAGE: ${{ needs.resolve.outputs.image }}
+          CANDIDATE: ${{ needs.resolve.outputs.candidate }}
+          AIO_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          docker buildx imagetools create --tag "$IMAGE:$AIO_TAG" "$CANDIDATE"
+          docker buildx imagetools create --tag "$IMAGE:latest" "$CANDIDATE"
