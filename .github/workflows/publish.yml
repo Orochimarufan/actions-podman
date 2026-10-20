@@ -76,7 +76,7 @@ jobs:
           context: .
           file: ./Containerfile
           build-args: |
-            AIO_TAG=${{ steps.aio.outputs.tag }}
+            AIO_TAG=${{ needs.resolve.outputs.tag }}
           push: true
           tags: ${{ needs.resolve.outputs.candidate }}
 
